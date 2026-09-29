@@ -318,8 +318,89 @@ __device__ void accumulate_pv(const float* p_tile, const float* v_tile, float* o
     }
 }
 
-# Step 23 - flash_attention_kernel (not yet solved)
-# TODO: implement
+# Step 23 - flash_attention_kernel
+__global__ void flash_attention_kernel(const float* q, const float* k, const float* v,
+                                       float* out, int seq_len, int head_dim,
+                                       int tile_q, int tile_k, float scale) {
+    extern __shared__ float smem[];
+    float* q_s   = smem;                         // tile_q * head_dim
+    float* k_s   = q_s + tile_q * head_dim;      // tile_k * head_dim
+    float* v_s   = k_s + tile_k * head_dim;      // tile_k * head_dim
+    float* s_s   = v_s + tile_k * head_dim;      // tile_q * tile_k
+    float* o_s   = s_s + tile_q * tile_k;        // tile_q * head_dim
+    float* m_s   = o_s + tile_q * head_dim;      // running max per row
+    float* l_s   = m_s + tile_q;                 // running sum per row
+    float* tmax  = l_s + tile_q;                 // tile max, then new max, then tile sum
+    float* alpha = tmax + tile_q;                // correction factor per row
+
+    int tid = threadIdx.x;
+    int nt = blockDim.x;
+    int q_start = blockIdx.x * tile_q;
+
+    load_tile(q, q_s, q_start, 0, seq_len, head_dim, tile_q, head_dim, tid, nt);
+    for (int idx = tid; idx < tile_q * head_dim; idx += nt) {
+        o_s[idx] = 0.0f;
+    }
+    for (int r = tid; r < tile_q; r += nt) {
+        m_s[r] = -INFINITY;
+        l_s[r] = 0.0f;
+    }
+    __syncthreads();
+
+    for (int k_start = 0; k_start < seq_len; k_start += tile_k) {
+        load_tile(k, k_s, k_start, 0, seq_len, head_dim, tile_k, head_dim, tid, nt);
+        load_tile(v, v_s, k_start, 0, seq_len, head_dim, tile_k, head_dim, tid, nt);
+        __syncthreads();
+
+        tile_scores(q_s, k_s, s_s, tile_q, tile_k, head_dim, scale, tid, nt);
+        __syncthreads();
+
+        for (int idx = tid; idx < tile_q * tile_k; idx += nt) {
+            int c = idx % tile_k;
+            if (k_start + c >= seq_len) {
+                s_s[idx] = -INFINITY;
+            }
+        }
+        __syncthreads();
+
+        tile_rowmax(s_s, tmax, tile_q, tile_k, tid, nt);
+        __syncthreads();
+
+        for (int r = tid; r < tile_q; r += nt) {
+            float m_old = m_s[r];
+            float m_new = online_max(m_old, tmax[r]);
+            alpha[r] = correction_factor(m_old, m_new);
+            m_s[r] = m_new;
+            tmax[r] = m_new;
+        }
+        __syncthreads();
+
+        tile_exp(s_s, tmax, tile_q, tile_k, tid, nt);
+        __syncthreads();
+
+        // tmax is no longer needed, so reuse it for the tile row sums
+        tile_rowsum(s_s, tmax, tile_q, tile_k, tid, nt);
+        __syncthreads();
+
+        for (int r = tid; r < tile_q; r += nt) {
+            rescale_output(o_s + r * head_dim, head_dim, alpha[r]);
+            l_s[r] = update_running_sum(l_s[r], alpha[r], tmax[r]);
+        }
+        __syncthreads();
+
+        accumulate_pv(s_s, v_s, o_s, tile_q, tile_k, head_dim, tid, nt);
+        __syncthreads();
+    }
+
+    for (int idx = tid; idx < tile_q * head_dim; idx += nt) {
+        int r = idx / head_dim;
+        int d = idx % head_dim;
+        int gr = q_start + r;
+        if (gr < seq_len) {
+            out[gr * head_dim + d] = o_s[idx] / l_s[r];
+        }
+    }
+}
 
 # Step 24 - flash_attention_launcher (not yet solved)
 # TODO: implement
