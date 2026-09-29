@@ -221,11 +221,33 @@ __device__ float update_running_sum(float old_sum, float correction, float block
     return correction * old_sum + block_sum;
 }
 
-# Step 16 - rescale_output (not yet solved)
-# TODO: implement
+# Step 16 - rescale_output
+__device__ void rescale_output(float* out_row, int head_dim, float correction) {
+    for (int d = 0; d < head_dim; d++) {
+        out_row[d] *= correction;
+    }
+}
 
-# Step 17 - load_tile (not yet solved)
-# TODO: implement
+# Step 17 - load_tile
+__device__ void load_tile(const float* src, float* shared_dst,
+                          int src_row_start, int src_col_start,
+                          int src_rows, int src_cols,
+                          int tile_rows, int tile_cols,
+                          int thread_id, int num_threads) {
+    int total = tile_rows * tile_cols;
+    for (int i = thread_id; i < total; i += num_threads) {
+        int r = i / tile_cols;
+        int c = i % tile_cols;
+        int gr = src_row_start + r;
+        int gc = src_col_start + c;
+
+        if (gr < src_rows && gc < src_cols) {
+            shared_dst[i] = src[(size_t)gr * src_cols + gc];
+        } else {
+            shared_dst[i] = 0.0f;
+        }
+    }
+}
 
 # Step 18 - tile_scores (not yet solved)
 # TODO: implement
