@@ -45,8 +45,32 @@ __global__ void row_max(const float* matrix, float* out, int rows, int cols) {
     }
 }
 
-# Step 5 - row_sum (not yet solved)
-# TODO: implement
+# Step 5 - row_sum
+__global__ void row_sum(const float* matrix, float* out, int rows, int cols) {
+    __shared__ float sdata[1024];
+
+    int r = blockIdx.x;
+    int tid = threadIdx.x;
+    if (r >= rows) return;
+
+    float sum = 0.0f;
+    for (int c = tid; c < cols; c += blockDim.x) {
+        sum += matrix[(size_t)r * cols + c];
+    }
+    sdata[tid] = sum;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            sdata[tid] += sdata[tid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        out[r] = sdata[0];
+    }
+}
 
 # Step 6 - dot_product (not yet solved)
 # TODO: implement
