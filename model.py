@@ -181,8 +181,30 @@ __global__ void pv_matmul(const float* p, const float* v, float* out, int seq_le
     }
 }
 
-# Step 12 - naive_attention (not yet solved)
-# TODO: implement
+# Step 12 - naive_attention
+void naive_attention(const float* d_q, const float* d_k, const float* d_v, float* d_out, int seq_len, int head_dim) {
+    float* d_scores = nullptr;
+    cudaMalloc(&d_scores, (size_t)seq_len * seq_len * sizeof(float));
+
+    // Stage 1: S = Q K^T / sqrt(d)
+    dim3 block2d(16, 16);
+    dim3 grid_qk((seq_len + block2d.x - 1) / block2d.x,
+                 (seq_len + block2d.y - 1) / block2d.y);
+    qk_scores<<<grid_qk, block2d>>>(d_q, d_k, d_scores, seq_len, head_dim);
+
+    // Stage 2: row-wise softmax in place, one block per row
+    int sm_block = 32;
+    while (sm_block < seq_len && sm_block < 1024) sm_block <<= 1;
+    softmax_rows<<<seq_len, sm_block>>>(d_scores, seq_len, seq_len);
+
+    // Stage 3: O = P V
+    dim3 grid_pv((head_dim + block2d.x - 1) / block2d.x,
+                 (seq_len + block2d.y - 1) / block2d.y);
+    pv_matmul<<<grid_pv, block2d>>>(d_scores, d_v, d_out, seq_len, head_dim);
+
+    cudaDeviceSynchronize();
+    cudaFree(d_scores);
+}
 
 # Step 13 - online_max (not yet solved)
 # TODO: implement
