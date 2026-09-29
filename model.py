@@ -30,8 +30,20 @@ __global__ void elementwise_exp(float* a, int n) {
     }
 }
 
-# Step 4 - row_max (not yet solved)
-# TODO: implement
+# Step 4 - row_max
+#include <cmath>
+
+__global__ void row_max(const float* matrix, float* out, int rows, int cols) {
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r < rows) {
+        float m = -INFINITY;
+        for (int c = 0; c < cols; c++) {
+            float v = matrix[r * cols + c];
+            if (v > m) m = v;
+        }
+        out[r] = m;
+    }
+}
 
 # Step 5 - row_sum (not yet solved)
 # TODO: implement
